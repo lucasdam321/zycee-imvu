@@ -23,6 +23,10 @@ def main(argv=None):
     scan.add_argument('cache', type=Path)
     scan.add_argument('--pid')
     scan.add_argument('--index', type=Path)
+    diagnose = commands.add_parser('diagnose', help='Gerar diagnóstico do HttpCache sem copiar seu conteúdo')
+    diagnose.add_argument('cache', type=Path)
+    diagnose.add_argument('--pid', required=True)
+    diagnose.add_argument('-o', '--output', type=Path, required=True, help='Arquivo JSON fora da pasta de cache')
     bind = commands.add_parser('associate', help='Cadastrar associação arquivo→PID confirmada por você')
     bind.add_argument('source', type=Path)
     bind.add_argument('--pid', required=True)
@@ -68,6 +72,11 @@ def main(argv=None):
             print(json.dumps(asdict(result), default=str, ensure_ascii=False, indent=2))
         elif args.command == 'associate':
             print(f'Associação cadastrada em: {associate(args.source, args.pid, args.index)}')
+        elif args.command == 'diagnose':
+            from .diagnostics import save_diagnostics
+            path = save_diagnostics(args.cache, args.pid, args.output)
+            print(f'Diagnóstico salvo: {path}')
+            print('O relatório contém nomes relativos, tamanhos e pistas; não contém conteúdo bruto nem confirma associação ao PID.')
         else:
             options = dict(center=args.center, scale=args.scale, overwrite=args.overwrite)
             paths = (convert_file(args.source, args.output, pid=args.pid, **options)

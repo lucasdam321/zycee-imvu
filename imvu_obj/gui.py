@@ -10,6 +10,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Callable
 
+from . import __version__
 from .cache import associate, export_product, scan_cache
 from .converter import convert_file
 
@@ -19,7 +20,7 @@ class Application:
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        root.title("IMVU → OBJ — arquivos locais")
+        root.title(f"IMVU → OBJ {__version__} — arquivos locais")
         root.geometry("920x720")
         root.minsize(700, 570)
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -27,7 +28,8 @@ class Application:
         self.buttons: list[ttk.Button] = []
 
         appdata = Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming")))
-        self.cache = tk.StringVar(value=str(appdata / "IMVU"))
+        imvu_root = appdata / "IMVU"
+        self.cache = tk.StringVar(value=str(imvu_root / "HttpCache" if (imvu_root / "HttpCache").is_dir() else imvu_root))
         self.pid = tk.StringVar(value="74667074")
         self.source = tk.StringVar()
         self.output = tk.StringVar(value=str(Path.home() / "IMVU-OBJ"))
@@ -73,12 +75,15 @@ class Application:
         associate_button = ttk.Button(actions, text="Associar arquivo ao PID", command=self._associate)
         associate_button.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.buttons.append(associate_button)
+        diagnose_button = ttk.Button(actions, text="Diagnosticar HttpCache", command=self._diagnose)
+        diagnose_button.grid(row=1, column=2, sticky="w", pady=(8, 0))
+        self.buttons.append(diagnose_button)
 
         ttk.Label(
             frame,
             text=(
-                "A busca exige uma associação verificável entre arquivo e PID. Na conversão direta, "
-                "o PID informado apenas rotula a saída e não confirma a origem da malha."
+                "O índice proprietário do HttpCache ainda não é interpretado. Se a busca não encontrar o PID, "
+                "use Diagnosticar HttpCache. Na conversão direta, o PID apenas rotula a saída."
             ),
             wraplength=820,
         ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 5))
@@ -179,6 +184,7 @@ class Application:
                 self.events.put(("log", f"Aviso: {warning}"))
             if not report.matches:
                 self.events.put(("log", f"Nenhum arquivo associado ao PID {pid} foi localizado. Nenhum produto foi exportado."))
+                self.events.put(("log", "O índice proprietário do HttpCache ainda não é interpretado. Use Diagnosticar HttpCache para gerar pistas da estrutura local."))
 
         self._start("Buscando arquivos no cache…", work)
 
@@ -257,6 +263,27 @@ class Application:
             self.events.put(("log", "Agora a busca por PID reconhecerá o conteúdo deste arquivo, mesmo que seu nome mude."))
 
         self._start("Registrando associação ao PID…", work)
+
+    def _diagnose(self) -> None:
+        try:
+            from datetime import datetime
+            cache, pid = self._cache_path(), self._required_pid()
+            output_value = self.output.get().strip()
+            if not output_value:
+                raise ValueError("Selecione uma pasta de saída fora do cache para salvar o diagnóstico.")
+            output = Path(output_value).expanduser() / f"diagnostico_{pid}_{datetime.now():%Y%m%d_%H%M%S_%f}.json"
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("Verifique os campos", str(exc), parent=self.root)
+            return
+
+        def work() -> None:
+            from .diagnostics import save_diagnostics
+            path = save_diagnostics(cache, pid, output)
+            self.events.put(("log", f"Diagnóstico salvo: {path}"))
+            self.events.put(("log", "O relatório lista nomes relativos, tamanhos, assinaturas e ocorrências do PID, sem copiar conteúdo bruto."))
+            self.events.put(("log", "Ele não confirma que uma malha pertence ao PID. Revise o JSON antes de compartilhar; os nomes dos arquivos ficam visíveis."))
+
+        self._start("Diagnosticando a estrutura do HttpCache…", work)
 
     def _start(self, label: str, work: Callable[[], None]) -> None:
         if self.busy:

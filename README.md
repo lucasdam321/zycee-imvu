@@ -31,6 +31,14 @@ A associação usa, nesta ordem:
 
 Também procura malhas dentro de ZIPs não criptografados sem extrair seus caminhos para o disco. Não interpreta bancos de dados/índices proprietários do Classic, não consulta servidores IMVU e não determina o PID de um arquivo hash desconhecido por tentativa. Se seu cache só contiver arquivos hash sem um vínculo conhecido, **converter um arquivo direto funciona; buscar qualquer PID automaticamente ainda exige o índice real do cache ou uma associação fornecida por você**.
 
+### Quando a busca não encontra o PID no HttpCache
+
+Selecione `%APPDATA%\IMVU\HttpCache`, informe o PID e clique **Diagnosticar HttpCache**. O JSON será salvo na pasta de saída, que deve ficar fora do cache. O programa prefere `HttpCache` como pasta padrão quando ela existe.
+
+O diagnóstico registra nomes relativos, tamanhos, assinaturas de formatos, possíveis arquivos de índice e quais arquivos têm uma ocorrência literal do PID nos trechos examinados. Também procura a assinatura CMF nos primeiros 64 KiB para identificar malhas que não começam no byte zero. Não contém conteúdo bruto de arquivos, cabeçalhos HTTP ou valores de cookies, e não executa/edita o cache. Os nomes dos arquivos ficam visíveis; revise o relatório antes de compartilhá-lo.
+
+**Uma ocorrência do PID não prova que todas as malhas do mesmo arquivo pertençam ao produto.** O relatório serve para investigar o layout real do cache; não resolve o vínculo automaticamente. Limites de leitura/listagem e resultados incompletos são informados. Um PID não encontrado nos trechos lidos pode existir em outra região, em um índice compactado ou fora dessa pasta. Enviar apenas o JSON de diagnóstico permite iniciar a análise sem enviar o cache inteiro.
+
 Se souber qual arquivo pertence a outro PID, use **Associar arquivo ao PID** na interface, ou o comando `associate`. O índice fica em `~/IMVU-OBJ/product-index.json`, separado do cache, e armazena apenas SHA-256→PID. Para ZIPs, a associação manual abrange todas as malhas do ZIP: use apenas um contêiner que você confirmou pertencer ao produto. Associações conflitantes são recusadas.
 
 ## Abrir no Blender
@@ -49,6 +57,7 @@ py -3 -m imvu_obj convert "C:\caminho\639d4a659f55b4181683aa01e02e7ed0" --pid 74
 py -3 -m imvu_obj scan "C:\Users\User\AppData\Roaming\IMVU" --pid 74667074
 py -3 -m imvu_obj export "C:\Users\User\AppData\Roaming\IMVU" --pid 74667074 --center -o "C:\Users\User\IMVU-OBJ"
 py -3 -m imvu_obj associate "C:\caminho\malha_confirmada" --pid 12345678
+py -3 -m imvu_obj diagnose "C:\Users\User\AppData\Roaming\IMVU\HttpCache" --pid 74667074 -o "C:\Users\User\IMVU-OBJ\diagnostico_74667074.json"
 ```
 
 `scan` e `export` aceitam `--index caminho.json`; `associate` também, para manter índices separados. Um PID fornecido a `convert` é somente um rótulo de saída, não cadastra associação automaticamente. Código de saída 0 indica sucesso, 1 falha e 130 interrupção. Um erro de conversão impede a escrita do lote antes de criar arquivos OBJ; o cache nunca é alterado.
