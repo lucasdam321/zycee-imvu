@@ -7,7 +7,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 
-from .converter import (MAX_FILE_BYTES, Asset, prepare_outputs, read_assets,
+from .converter import (MAX_FILE_BYTES, Asset, identify_payload, prepare_outputs, read_assets,
                         validate_pid, write_outputs)
 
 # Associação fornecida pelo usuário e fixada pelo CONTEÚDO, não pelo nome.
@@ -27,11 +27,24 @@ class Candidate:
 
 
 @dataclass
+class ProductFile:
+    """Arquivo com PID no caminho; não implica presença de geometria."""
+
+    source: Path
+    pid: str
+    size: int
+    format: str = 'unknown'
+    mesh_count: int = 0
+    error: str | None = None
+
+
+@dataclass
 class ScanReport:
     matches: list = field(default_factory=list)
     unassigned: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     scanned_files: int = 0
+    product_files: list = field(default_factory=list)
 
 
 def default_index_path():
@@ -93,7 +106,26 @@ def associate(source: Path, pid: str, index_path=None):
 
 def _path_pids(relative):
     found = set()
-    for part in PurePosixPath(str(relative).replace('\\', '/')).parts:
+    parts = PurePosixPath(str(relative).replace('\\', '/')).parts
+    shards = set()
+    # HttpCache separa o hash em dois diretórios: 15/08/productPID_1508…
+    # Esses diretórios numéricos NÃO são PIDs.
+    for index, part in enumerate(parts):
+        hashed = re.fullmatch(r'(?:product[1-9][0-9]{0,19}_)?([0-9a-f]{32})', part, re.I)
+        if hashed:
+            digest = hashed.group(1).lower()
+            if index >= 1 and parts[index - 1].lower() == digest[2:4]:
+                shards.add(index - 1)
+                if index >= 2 and parts[index - 2].lower() == digest[:2]:
+                    shards.add(index - 2)
+    for index, part in enumerate(parts):
+        if index in shards:
+            continue
+        # Layout observado no diagnóstico real do HttpCache do Classic.
+        cache_name = re.fullmatch(r'product([1-9][0-9]{0,19})_[0-9a-f]{32}', part, re.I)
+        if cache_name:
+            found.add(cache_name.group(1))
+            continue
         # Somente componentes inequivocamente rotulados: 123, 123.cmf, product_123.
         match = re.fullmatch(r'(?:product[_-]?)?([1-9][0-9]{0,19})(?:\.(?:cmf|xmf|zip))?', part, re.I)
         if match:
@@ -123,17 +155,32 @@ def scan_cache(cache: Path, pid: str | None = None, index_path=None) -> ScanRepo
             if source.is_symlink():
                 continue
             report.scanned_files += 1
+            product_file = None
             try:
+                file_pids = _path_pids(source.relative_to(cache)) | _path_pids(cache.name)
+                size = source.stat().st_size
+                if len(file_pids) == 1:
+                    file_pid = next(iter(file_pids))
+                    if pid is None or file_pid == pid:
+                        product_file = ProductFile(source, file_pid, size)
+                        # Registrar ANTES de tentar interpretar o conteúdo.
+                        report.product_files.append(product_file)
                 # Arquivos grandes são relatados, não alocados integralmente.
-                if source.stat().st_size > MAX_FILE_BYTES:
+                if size > MAX_FILE_BYTES:
+                    if product_file:
+                        product_file.error = 'Arquivo localizado, mas excede o limite de leitura de 64 MiB.'
                     report.warnings.append(f'Ignorado (maior que 64 MiB): {source}')
                     continue
+                if product_file:
+                    with source.open('rb') as stream:
+                        head = stream.read(65536)
+                    product_file.format = identify_payload(head)
                 assets = read_assets(source)
+                if product_file:
+                    product_file.mesh_count = len(assets)
                 for asset in assets:
                     sha = hashlib.sha256(asset.data).hexdigest()
-                    path_pids = _path_pids(source.relative_to(cache))
-                    # Um cache selecionado diretamente na pasta do produto também funciona.
-                    path_pids |= _path_pids(cache.name)
+                    path_pids = set(file_pids)
                     if asset.member:
                         path_pids |= _path_pids(asset.member)
                     associated = mapping.get(sha)
@@ -152,6 +199,8 @@ def scan_cache(cache: Path, pid: str | None = None, index_path=None) -> ScanRepo
                     elif pid is None or associated == pid:
                         report.matches.append(candidate)
             except (OSError, ValueError) as exc:
+                if product_file:
+                    product_file.error = str(exc)
                 report.warnings.append(f'{source}: {exc}')
     return report
 
@@ -162,6 +211,15 @@ def export_product(cache: Path, pid: str, output_dir: Path, *, center=False,
         raise ValueError('Informe o PID do produto que deseja exportar.')
     report = scan_cache(cache, pid, index_path)
     if not report.matches:
+        if report.product_files:
+            paths = '\n'.join(str(f.source) for f in report.product_files[:5])
+            if all(f.format in {'CFL3', 'DFL3', 'ZIP'} and not f.error for f in report.product_files):
+                raise ValueError(f'Arquivo do PID {pid} localizado e contêiner lido, mas nenhuma malha CMF/XMF '
+                                 f'foi encontrada. O produto pode depender de geometria de um ancestral. '
+                                 f'Nenhum OBJ foi gerado.\n{paths}')
+            raise ValueError(f'Arquivo do PID {pid} localizado ({len(report.product_files)} arquivo(s)), '
+                             f'mas nenhuma malha CMF/XMF foi reconhecida. O formato do conteúdo ainda não é suportado '
+                             f'ou não contém geometria. Nenhum OBJ foi gerado.\n{paths}')
         detail = f' {len(report.unassigned)} malha(s) encontrada(s) sem PID.' if report.unassigned else ''
         raise ValueError(f'Não foi encontrada malha associada ao PID {pid}.{detail} '
                          'PIDs não podem ser deduzidos de um nome hash. Use conversão direta ou cadastre uma associação confirmada.')

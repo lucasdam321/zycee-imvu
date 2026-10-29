@@ -20,6 +20,7 @@ class Asset:
     member: str | None
     data: bytes
     format: str
+    container_format: str | None = None
 
 
 def detect_format(data: bytes) -> str | None:
@@ -29,6 +30,26 @@ def detect_format(data: bytes) -> str | None:
     if head.startswith(b'<') and re.search(br'<MESH(?:\s|>)', head):
         return 'XMF'
     return None
+
+
+def identify_payload(head: bytes) -> str:
+    """Identifica tipos comuns sem confundir imagem/metadados com geometria."""
+    mesh_format = detect_format(head)
+    if mesh_format:
+        return mesh_format
+    signatures = ((b'PK\x03\x04', 'ZIP'), (b'PK\x05\x06', 'ZIP'),
+                  (b'CFL3', 'CFL3'), (b'DFL3', 'DFL3'),
+                  (b'\x89PNG\r\n\x1a\n', 'PNG'), (b'\xff\xd8\xff', 'JPEG'),
+                  (b'GIF87a', 'GIF'), (b'GIF89a', 'GIF'), (b'DDS ', 'DDS'),
+                  (b'BM', 'BMP'), (b'SQLite format 3\0', 'SQLite'), (b'\x1f\x8b', 'gzip'))
+    for signature, name in signatures:
+        if head.startswith(signature):
+            return name
+    if head.startswith(b'RIFF') and head[8:12] == b'WEBP':
+        return 'WEBP'
+    if len(head) >= 2 and head[0] & 15 == 8 and head[0] >> 4 <= 7 and (head[0] * 256 + head[1]) % 31 == 0:
+        return 'zlib'
+    return 'unknown'
 
 
 def read_assets(source: Path) -> list[Asset]:
@@ -44,6 +65,19 @@ def read_assets(source: Path) -> list[Asset]:
         if len(data) > MAX_FILE_BYTES:
             raise MeshError('Arquivo cresceu durante a leitura; tente novamente com o IMVU fechado.')
         return [Asset(None, data, fmt)]
+    if head.startswith((b'CFL3', b'DFL3')):
+        from .cfl import read_cfl
+        with source.open('rb') as stream:
+            data = stream.read(MAX_FILE_BYTES + 1)
+        if len(data) > MAX_FILE_BYTES:
+            raise MeshError('Contêiner CFL/DFL excede o limite de 64 MiB.')
+        try:
+            entries = read_cfl(data)
+        except ValueError as exc:
+            raise MeshError(f'Contêiner CFL/DFL inválido: {exc}') from exc
+        container_format = head[:4].decode('ascii')
+        return [Asset(name, content, kind, container_format)
+                for name, content in entries if (kind := detect_format(content))]
     if head.startswith((b'PK\x03\x04', b'PK\x05\x06')):
         try:
             with zipfile.ZipFile(source) as archive:
@@ -65,7 +99,7 @@ def read_assets(source: Path) -> list[Asset]:
                             data = member_head + stream.read(MAX_FILE_BYTES + 1 - len(member_head))
                             if len(data) > MAX_FILE_BYTES:
                                 raise MeshError('Entrada ZIP excede o limite de leitura.')
-                            assets.append(Asset(info.filename, data, member_format))
+                            assets.append(Asset(info.filename, data, member_format, 'ZIP'))
                 return assets
         except (zipfile.BadZipFile, RuntimeError, NotImplementedError, zlib.error, EOFError) as exc:
             raise MeshError(f'ZIP inválido ou não suportado: {exc}') from exc
@@ -127,7 +161,9 @@ def prepare_outputs(source: Path, asset: Asset, output_dir: Path, *, pid=None,
         uv_offset += len(sub.uvs)
         normal_offset += len(sub.normals)
     report = {
-        'source': str(Path(source).resolve()), 'zip_member': asset.member,
+        'source': str(Path(source).resolve()),
+        'source_container': asset.container_format, 'container_member': asset.member,
+        'zip_member': asset.member if asset.container_format == 'ZIP' else None,
         'sha256': sha, 'pid': pid, 'pid_evidence': evidence,
         'format': asset.format, 'version': mesh.version,
         'vertices': len(positions), 'triangles': sum(len(s.faces) for s in mesh.submeshes),
@@ -167,6 +203,14 @@ def convert_file(source: Path, output_dir: Path, *, pid: str | None = None,
     source = Path(source)
     assets = read_assets(source)
     if not assets:
+        with source.open('rb') as stream:
+            kind = identify_payload(stream.read(65536))
+        if kind in {'PNG', 'JPEG', 'GIF', 'DDS', 'BMP', 'WEBP'}:
+            raise MeshError(f'O arquivo selecionado é uma imagem {kind}, não uma malha 3D. '
+                            'Uma imagem não contém os vértices e faces necessários para gerar OBJ.')
+        if kind in {'CFL3', 'DFL3', 'ZIP'}:
+            raise MeshError(f'Contêiner {kind} lido, mas não contém malha CMF/XMF exportável. '
+                            'O produto pode depender de malhas de outro produto/ancestral.')
         raise MeshError('Nenhuma malha CMF/XMF identificada. O arquivo pode ser imagem, metadado ou um contêiner não suportado.')
     outputs, objects = {}, []
     for asset in assets:

@@ -7,7 +7,7 @@ Conversor em Python 3.10+ de malhas Cal3D para abrir no Blender. Sem bibliotecas
 1. Instale **Python 3.10 ou superior** de python.org, com **Tcl/Tk** e o launcher `py` (opções do instalador).
 2. Extraia o ZIP do programa inteiro. Não execute de dentro do ZIP.
 3. Abra `Iniciar.bat`. Também é possível executar `py -3 -m imvu_obj gui` na pasta extraída.
-4. O cache padrão é `%APPDATA%\IMVU`, no seu caso `C:\Users\User\AppData\Roaming\IMVU`. A ferramenta percorre as subpastas; feche o IMVU durante a leitura para evitar arquivos mudando.
+4. Selecione `%APPDATA%\IMVU\HttpCache`, no seu caso `C:\Users\User\AppData\Roaming\IMVU\HttpCache`. A ferramenta percorre as subpastas; feche o IMVU durante a leitura para evitar arquivos mudando.
 5. Informe o PID e clique **Buscar PID no cache**, depois **Exportar produto por PID**. Escolha saída fora do cache, por exemplo `C:\Users\User\IMVU-OBJ`.
 6. Para um arquivo específico, selecione **Arquivo direto** e clique **Converter arquivo direto**. O arquivo pode não ter extensão.
 
@@ -27,9 +27,14 @@ A associação usa, nesta ordem:
 
 - SHA-256 da amostra acima ou associação cadastrada explicitamente por você;
 - PID isolado em componente do caminho, por exemplo `Product_74667074/mesh`, `74667074/mesh` ou `74667074.cmf`. Isso é uma pista da organização local, não autenticação da origem. Confira o relatório;
+- padrão real do HttpCache **`product<PID>_<hash32>`**, por exemplo `15/08/product74667074_1508083db59c9bb708c5bd532bb5b85f`. Os diretórios `15/08` são partições do hash e não são tratados como PIDs;
 - sem nenhuma dessas evidências, a malha aparece como **sem PID** e não é exportada como se pertencesse ao produto solicitado.
 
-Também procura malhas dentro de ZIPs não criptografados sem extrair seus caminhos para o disco. Não interpreta bancos de dados/índices proprietários do Classic, não consulta servidores IMVU e não determina o PID de um arquivo hash desconhecido por tentativa. Se seu cache só contiver arquivos hash sem um vínculo conhecido, **converter um arquivo direto funciona; buscar qualquer PID automaticamente ainda exige o índice real do cache ou uma associação fornecida por você**.
+Também procura malhas dentro de ZIPs, CFL3 e DFL3, descompactando em memória sem extrair caminhos do contêiner para o disco. Não interpreta bancos de dados/índices proprietários do Classic, não consulta servidores IMVU e não determina o PID de um arquivo hash desconhecido por tentativa. Para arquivos hash sem PID no nome e sem vínculo conhecido, a associação ainda depende de um índice real do cache ou de informação fornecida por você.
+
+Desde a versão **1.2**, **Buscar PID no cache** encontra arquivos `product<PID>_<hash32>` mesmo quando seu conteúdo não é reconhecido, mostra caminho/tamanho/formato e seleciona o arquivo automaticamente no campo **Arquivo direto**. O resultado separa **arquivo de produto localizado** de **malha reconhecida**. **Exportar produto por PID** tenta abrir automaticamente as malhas do contêiner suportado. Não é preciso procurar o arquivo manualmente. Se o conteúdo continuar desconhecido ou não contiver geometria, a ferramenta informa essa limitação e não gera um OBJ vazio.
+
+O diagnóstico enviado pelo usuário confirmou o nome e o tamanho do arquivo `product74667074_…`, mas não incluiu seus bytes. Portanto o suporte a CFL/DFL não comprova que esse arquivo específico seja um desses formatos. O arquivo `d31e8f…` selecionado no screenshot foi identificado como imagem pelo diagnóstico; imagens são recusadas como fonte direta de OBJ.
 
 ### Quando a busca não encontra o PID no HttpCache
 
@@ -66,7 +71,7 @@ py -3 -m imvu_obj diagnose "C:\Users\User\AppData\Roaming\IMVU\HttpCache" --pid 
 
 - CMF binário little endian versões 699–919; layout público Cal3D/IMVU, com cores/morph count desde 911. A amostra real foi validada em 919; outras versões são cobertas por fixtures sintéticas.
 - XMF XML com HEADER/MESH irmãos ou MESH raiz, faces triangulares e IDs de vértice explícitos.
-- ZIP comum contendo essas malhas, sem extrair arquivos para o disco. Não trata outros contêineres proprietários, criptografia ou fluxos compactados avulsos.
+- ZIP comum e contêineres **CFL3/DFL3** contendo essas malhas, sem extrair caminhos para o disco. CFL/DFL aceita blocos brutos ou LZMA no formato do IMVU. Não trata outras variantes desconhecidas, criptografia ou fluxos compactados avulsos.
 - Apenas primeiro canal UV no OBJ; cores, LOD progressivo, física e morph targets são omitidos. A leitura percorre esses campos do CMF para localizar as faces.
 - Arquivo/entrada até 64 MiB; ZIP até 128 MiB descompactado e 10.000 entradas. Sem symlinks na busca. Não dá permissão de acesso a pastas que o seu usuário não consegue ler.
 - Rejeita truncamento, índices de face inexistentes, números não finitos, versões desconhecidas e bytes finais inesperados. Avisos e arquivos inacessíveis são relatados por `scan`.
@@ -83,3 +88,5 @@ Sem `IMVU_SAMPLE_PATH`, os testes do asset externo são marcados como skipped. O
 A amostra real exportada foi importada no **Blender 4.3.2**, com 2.079 vértices, 3.662 polígonos triangulares, 1 canal UV e 1 material. `Mesh.validate()` não precisou reparar a malha. OBJ/MTL, `.blend` e prévia foram gerados separadamente para validação; **os assets 3D não estão incluídos neste repositório ou no ZIP do código**. A interface Tk/launcher foi verificada em código; a execução visual no Windows ainda precisa ser confirmada no seu computador.
 
 Referência do formato: [loader oficial Cal3D/IMVU, commit 8522b45](https://github.com/imvu/cal3d/blob/8522b45cdc26960f779323cc9a0ef50678eda7de/src/cal3d/loader.cpp#L931) e [constantes de versão](https://github.com/imvu/cal3d/blob/8522b45cdc26960f779323cc9a0ef50678eda7de/src/cal3d/global.h#L52). Implementação independente em Python; nenhum executável ou código do cache é executado.
+
+Referências CFL/DFL: [LibCFL, commit 8541594](https://github.com/Toyz/LibCFL/tree/8541594e34e6e99ece4c42096663ade112335f4b) e [cfl-converter, commit 25c408f](https://github.com/dhkatz/cfl-converter/tree/25c408ffd769410a44babdcc88f7397e8aea6b02), ambos MIT. Veja os créditos em `THIRD_PARTY_NOTICES.md`. O programa usa apenas o cache local; não implementa downloads de produtos.

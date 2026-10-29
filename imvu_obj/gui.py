@@ -82,8 +82,8 @@ class Application:
         ttk.Label(
             frame,
             text=(
-                "O índice proprietário do HttpCache ainda não é interpretado. Se a busca não encontrar o PID, "
-                "use Diagnosticar HttpCache. Na conversão direta, o PID apenas rotula a saída."
+                "A busca localiza product<PID>_<hash> no HttpCache. Localizar o arquivo não garante converter seu conteúdo. "
+                "A exportação lê CMF/XMF e malhas dentro de ZIP, CFL3 ou DFL3."
             ),
             wraplength=820,
         ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 5))
@@ -166,7 +166,16 @@ class Application:
 
         def work() -> None:
             report = scan_cache(cache, pid)
-            self.events.put(("log", f"Arquivos examinados: {report.scanned_files}. Correspondências: {len(report.matches)}."))
+            self.events.put(("log", f"Arquivos examinados: {report.scanned_files}. Arquivos com PID no caminho: {len(report.product_files)}. Malhas associadas: {len(report.matches)}."))
+            for product_file in report.product_files:
+                kind = product_file.format if product_file.format != 'unknown' else 'ainda não identificado'
+                self.events.put(("log", f"ARQUIVO DO PRODUTO LOCALIZADO: {product_file.source}\n  PID: {product_file.pid}; tamanho: {product_file.size} bytes; formato: {kind}."))
+                if product_file.error:
+                    self.events.put(("log", f"  Leitura: {product_file.error}"))
+            selected = report.matches[0].source if report.matches else (report.product_files[0].source if report.product_files else None)
+            if selected:
+                self.events.put(("source", str(selected)))
+                self.events.put(("log", "O arquivo localizado foi selecionado automaticamente no campo Arquivo direto."))
             for candidate in report.matches:
                 path = str(candidate.source)
                 if candidate.member:
@@ -183,8 +192,11 @@ class Application:
             for warning in report.warnings:
                 self.events.put(("log", f"Aviso: {warning}"))
             if not report.matches:
-                self.events.put(("log", f"Nenhum arquivo associado ao PID {pid} foi localizado. Nenhum produto foi exportado."))
-                self.events.put(("log", "O índice proprietário do HttpCache ainda não é interpretado. Use Diagnosticar HttpCache para gerar pistas da estrutura local."))
+                if report.product_files:
+                    self.events.put(("log", "Arquivo do produto localizado, mas nenhuma malha CMF/XMF foi reconhecida no conteúdo. Confira o formato e os avisos acima; nenhum OBJ foi gerado."))
+                else:
+                    self.events.put(("log", f"Nenhum arquivo associado ao PID {pid} foi localizado nesta pasta. Nenhum produto foi exportado."))
+                    self.events.put(("log", "Use Diagnosticar HttpCache para gerar pistas da estrutura local."))
 
         self._start("Buscando arquivos no cache…", work)
 
@@ -320,6 +332,8 @@ class Application:
                 break
             if event == "log":
                 self._append(value)
+            elif event == "source":
+                self.source.set(value)
             elif event == "error":
                 self._append("Erro: " + value)
                 messagebox.showerror("Não foi possível concluir", value, parent=self.root)

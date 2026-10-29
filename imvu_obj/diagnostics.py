@@ -25,6 +25,8 @@ MAX_OFFSETS = 128
 
 
 def _kind(head):
+    if head.startswith((b'CFL3', b'DFL3')):
+        return head[:4].decode('ascii')
     if head.startswith(b'CMF\0'):
         return 'CMF'
     if head.startswith(b'SQLite format 3\0'):
